@@ -1,3 +1,11 @@
+/*
+ * ESP32-CAM.
+ *
+ * Espera la señal del robot,
+ * captura una imagen,
+ * realiza un análisis cromático
+ * y envía foto y diagnóstico a Telegram.
+ */
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -10,13 +18,13 @@
 // === CONFIGURACIÓN DE CREDENCIALES ===
 const char* SSID = "TU_SSID_WIFI";
 const char* PASSWORD = "TU_PASSWORD_WIFI";
-const char* BOT_TOKEN = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ";  // Bot Token (de Botfather)
-const char* CHAT_ID = "123456789";                                // ID individual (@myidbot) autorizado en el bot
+const char* BOT_TOKEN = "1234567890:ABCDE_fghijklmnopkrstuvwxyz01234567";  // Bot Token (de Botfather)
+const char* CHAT_ID = "123456789";                                         // ID individual (@myidbot) autorizado en el bot
 
+// Servidor de la API de Telegram
 const char* TELEGRAM_URL = "api.telegram.org";
 
-bool capturaPendiente = false;
-
+// Cliente TCP para conectar a Telegram
 WiFiClientSecure clientTCP;
 
 // Pines de la cámara (Modelo AI-Thinker)
@@ -92,8 +100,8 @@ void conectarWifi() {
     Serial.println(SSID);
     WiFi.begin(SSID, PASSWORD);
 
-    clientTCP.setInsecure();
-    clientTCP.setTimeout(10);
+    clientTCP.setInsecure();   // no validar SSL para mayor velocidad
+    clientTCP.setTimeout(10);  // timeout de lectura (10 ms)
 
     while (WiFi.status() != WL_CONNECTED) {
         Serial.print(".");
@@ -105,9 +113,11 @@ void conectarWifi() {
 }
 
 /**
- * Captura la foto y la retorna; null si falla.
+ * Captura una imagen y devuelve el framebuffer obtenido.
+ * Devuelve NULL si la captura falla.
  */
 camera_fb_t* capturarFoto() {
+    // Liberar cualquier foto pendiente antes de capturar una nueva
     camera_fb_t* fb_anterior = esp_camera_fb_get();
     if (fb_anterior) {
         esp_camera_fb_return(fb_anterior);
@@ -115,10 +125,6 @@ camera_fb_t* capturarFoto() {
     }
 
     camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println(F("Fallo en la captura"));
-        return NULL;
-    }
     return fb;
 }
 
@@ -139,18 +145,21 @@ String ejecutarAnalisisCromatico(camera_fb_t* fb) {
         return "Error al procesar la imagen";
     }
 
-    // Algoritmo de detección de verdes y amarillos
+    // Contadores para clasificar los píxeles del área central
     unsigned long pixelesVerdes = 0;
     unsigned long pixelesAmarillos = 0;
 
+    // Ancho y alto completo de la captura
     int ancho = fb->width;
     int alto = fb->height;
 
+    // Analizar solamente la zona central de la imagen
     int xInicio = ancho * 0.2;
     int xFin = ancho * 0.8;
     int yInicio = alto * 0.2;
     int yFin = alto * 0.8;
 
+    // Convertir cada píxel RGB565 a RGB888 para compararlo
     for (int y = yInicio; y < yFin; y++) {
         for (int x = xInicio; x < xFin; x++) {
             int indice = (y * ancho + x) * 2;
@@ -195,6 +204,7 @@ void enviarFoto(camera_fb_t* fb) {
     if (clientTCP.connect(TELEGRAM_URL, 443)) {
         Serial.println(F("Conexión exitosa. Enviando archivo..."));
 
+        // Construcción manual del formulario multipart
         String head = "--RobotInvernadero\r\nContent-Disposition: form-data; name=\"chat_id\"; \r\n\r\n" + String(CHAT_ID) + "\r\n--RobotInvernadero\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
         String tail = "\r\n--RobotInvernadero--\r\n";
 
@@ -208,6 +218,7 @@ void enviarFoto(camera_fb_t* fb) {
 
         clientTCP.print(head);
 
+        // Enviar la imagen en bloques de 1024 bytes.
         uint8_t* fbBuf = fb->buf;
         size_t fbLen = fb->len;
         for (size_t n = 0; n < fbLen; n = n + 1024) {
@@ -222,10 +233,10 @@ void enviarFoto(camera_fb_t* fb) {
 
         clientTCP.print(tail);
 
-        // libera recursos de la cámara inmediatamente
+        // Liberar recursos de la cámara inmediatamente
         esp_camera_fb_return(fb);
 
-        // respuesta de Telegram
+        // Esperar a que Telegram termine de responder para cerrar la conexión
         unsigned long timeout = millis();
         while (clientTCP.connected() && millis() - timeout < 4000) {
             if (clientTCP.available()) {
@@ -248,10 +259,11 @@ void enviarDiagnostico(String diagnostico) {
     if (clientTCP.connect(TELEGRAM_URL, 443)) {
         Serial.println(F("Conexión exitosa. Enviando texto..."));
 
-        texto.replace(" ", "%20");
-        texto.replace("\n", "%0A");
+        // Codificar caracteres básicos para enviarlos por URL
+        diagnostico.replace(" ", "%20");
+        diagnostico.replace("\n", "%0A");
 
-        clientTCP.println("GET /bot" + String(BOT_TOKEN) + "/sendMessage?chat_id=" + String(CHAT_ID) + "&text=" + texto + " HTTP/1.1");
+        clientTCP.println("GET /bot" + String(BOT_TOKEN) + "/sendMessage?chat_id=" + String(CHAT_ID) + "&text=" + diagnostico + " HTTP/1.1");
         clientTCP.println("Host: " + String(TELEGRAM_URL));
         clientTCP.println("Connection: close");
         clientTCP.println();
@@ -261,7 +273,6 @@ void enviarDiagnostico(String diagnostico) {
         Serial.println(F("Texto del diagnóstico enviado."));
     } else {
         Serial.println(F("Error: No se pudo conectar a Telegram para enviar el diagnostico."));
-        esp_camera_fb_return(fb);
     }
 }
 
@@ -269,19 +280,27 @@ void enviarDiagnostico(String diagnostico) {
  * Captura foto, analiza cromáticamente y envía diagnostico al Bot.
  */
 void capturarAnalizarYEnviar() {
+    // Encender el flash para iluminar la planta
     digitalWrite(FLASH_LED_PIN, HIGH);
-    delay(200);  // estabilización de luz
+    delay(200);  // tiempo para estabilizar la iluminación
 
+    // Capturar la imagen
     camera_fb_t* fb = capturarFoto();
 
+    // Apagar el flash una vez capturada la imagen
     digitalWrite(FLASH_LED_PIN, LOW);
 
-    if (fb) {
-        Serial.println(F("Foto tomada con éxito. Analizando..."));
-        String diagnostico = ejecutarAnalisisCromatico(fb);
-        enviarFoto(fb);
-        enviarDiagnostico(diagnostico);
+    if (!fb) {
+        Serial.println(F("No se pudo capturar la imagen."));
+        return;
     }
+
+    // Analizar la planta
+    String diagnostico = ejecutarAnalisisCromatico(fb);
+
+    // Enviar foto y diagnostico
+    enviarFoto(fb);
+    enviarDiagnostico(diagnostico);
 }
 
 /**
@@ -302,29 +321,43 @@ void setup() {
     configurarCamara();
     conectarWifi();
 
+    // Avisar al robot que la ESP32 terminó de inicializarse
     digitalWrite(GPIO_ACK_PIN, HIGH);
-    delay(50);
-    digitalWrite(GPIO_ACK_PIN, HIGH);
-    delay(800);  // tiempo para que el Arduino lo detecte estable
+    delay(800);  // dar tiempo al Arduino para detectar el estado HIGH
 
     Serial.println("ESP32 lista");
 }
 
 /**
- * Ejecución.
+ * Ejecución: espera solicitudes del robot y procesa cada planta.
+ *
+ * 1. Espera el pulso enviado por el robot.
+ * 2. Indica que la cámara está ocupada (ACK = LOW).
+ * 3. Captura una imagen de la planta.
+ * 4. Realiza el análisis cromático.
+ * 5. Envía la foto y el diagnóstico.
+ * 6. Indica que volvió a quedar disponible (ACK = HIGH).
  */
 void loop() {
+    // Esperar el pulso del robot
     if (digitalRead(GPIO_SIG_PIN) == HIGH) {
         delay(30);  // anti rebote
 
+        // Confirmar que no fue un rebote.
         if (digitalRead(GPIO_SIG_PIN) == HIGH) {
+            // Esperar a que el robot termine de enviar el pulso
             while (digitalRead(GPIO_SIG_PIN) == HIGH) {
                 delay(10);
             }
+
+            // Avisar que la cámara está ocupada
+            // El robot queda esperando hasta que ACK vuelva a HIGH
             digitalWrite(GPIO_ACK_PIN, LOW);
 
+            // Captura de foto, analisis cromatico y envío de resultado
             capturarAnalizarYEnviar();
 
+            // Avisar que la cámara volvió a quedar disponible
             digitalWrite(GPIO_ACK_PIN, HIGH);
             Serial.println("Proceso terminado, ESP32 lista");
         }

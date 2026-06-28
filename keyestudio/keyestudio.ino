@@ -1,3 +1,10 @@
+/*
+ * Robot móvil Keyestudio.
+ *
+ * Recorre el invernadero,
+ * detecta plantas mediante un sensor ultrasónico
+ * y coordina la captura de imágenes con la ESP32-CAM.
+ */
 #include <Arduino.h>
 
 // Pines de motor
@@ -14,11 +21,17 @@
 #define PIN_RX 0
 #define PIN_TX 1
 
+// Total de plantas a analizar
+const int TOTAL_PLANTAS = 3;
+
+// Contador de plantas encontradas hasta el momento
+int plantasEncontradas = 0;
+
 /**
  * Medir la distancia en centímetros.
  */
 int medirDistancia() {
-    // apagado del trigger para limpiar lectura anteriores
+    // Apagar el trigger para limpiar lecturas anteriores
     digitalWrite(PIN_TRIG, LOW);
     delayMicroseconds(2);
 
@@ -26,14 +39,16 @@ int medirDistancia() {
     delayMicroseconds(10);
     digitalWrite(PIN_TRIG, LOW);
 
-    long tiempo = pulseIn(PIN_ECHO, HIGH, 30000);  // timeout de 30s para estabiizar
+    // Esperar el eco hasta 30ms
+    long tiempo = pulseIn(PIN_ECHO, HIGH, 30000);
 
-    // Si tiempo es 0, no hay eco, por lo tanto el obstaculo está muy lejos
+    // Si no hubo eco (pulseIn -> 0) se considera que el obstaculo está muy lejos
     if (tiempo == 0) {
         return 9999;
     }
 
-    int distancia = tiempo / 59;  // conversión a cm
+    // Convertir el tiempo de eco a centímetros
+    int distancia = tiempo / 59;
     return distancia;
 }
 
@@ -117,8 +132,8 @@ void setup() {
     pinMode(PIN_TX, OUTPUT);
     pinMode(PIN_RX, INPUT);
     digitalWrite(PIN_TX, LOW);
-
-    // espera a recibir pulso de ESP32 estable
+    
+    // Esperar hasta que la ESP32 indique que está lista
     delay(1000);
     while (true) {
         if (digitalRead(PIN_RX) == HIGH) {
@@ -130,17 +145,18 @@ void setup() {
         delay(10);
     }
 
-    delay(500);  // margen final de sincronización
+    // Margen final para asegurar sincronización de ambos dispositivos
+    delay(500);
 }
 
-// Total de plantas a analizar
-const int TOTAL_PLANTAS = 3;
-
-// Contador de plantas encontradas hasta el momento
-int plantasEncontradas = 0;
-
 /**
- * Ejecución.
+ * Ejecución: recorrido del robot y sincronización con ESP32.
+ *
+ * 1. Avanza hasta detectar una planta con el sensor ultrasónico.
+ * 2. Se detiene y envía un pulso a la ESP32.
+ * 3. Espera mientras la ESP32 captura, analiza y envía los resultados.
+ * 4. Cuando la ESP32 vuelve a estar disponible, gira para continuar el recorrido.
+ * 5. Finaliza después de analizar la cantidad de plantas configurada.
  */
 void loop() {
     long distancia = medirDistancia();
@@ -153,10 +169,8 @@ void loop() {
 
         enviarPulso();
 
-        // espera a recibir pulso de ESP32 estable
-        while (digitalRead(PIN_RX) == HIGH) {
-            delay(10);
-        }
+        // Esperar a que la ESP32 termine:
+        // captura -> análisis -> envío a Telegram
         while (true) {
             if (digitalRead(PIN_RX) == HIGH) {
                 delay(50);
@@ -176,6 +190,7 @@ void loop() {
 
     if (plantasEncontradas >= TOTAL_PLANTAS) {
         frenar();
-        while (true) {}  // loop infinito para "terminar" el programa
+        while (true) {
+        }  // loop infinito para "terminar" el programa
     }
 }

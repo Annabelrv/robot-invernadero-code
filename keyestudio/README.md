@@ -1,9 +1,19 @@
-# Keyestudio
-## Robot, movimiento y sensor
-Programa para el robot Keyestudio, incluyendo:
-- movimiento del robot (avanzar, girar, etc.)
-- sensor ultrasónico para detectar planta
-- comunicación con ESP32-CAM
+# Robot Keyestudio
 
-### Configuración Arduino IDE
-- **Placa**: Arduino UNO
+Programa encargado del desplazamiento del robot y de coordinar el proceso de captura con la ESP32-CAM.
+
+## Hardware
+
+* Robot móvil Keyestudio
+* Sensor ultrasónico HC-SR04
+
+## Entorno
+
+Desarrollado para **Arduino IDE**.
+
+## Funciones principales
+
+* Control de los motores.
+* Detección de plantas mediante el sensor ultrasónico.
+* Sincronización con la ESP32 mediante señales digitales.
+* Continuación automática del recorrido hasta completar la cantidad de plantas configurada.
