@@ -129,7 +129,8 @@ camera_fb_t* capturarFoto() {
 }
 
 /**
- * Análisis cromático de la foto de la planta, para deducir SANA o ENFERMA.
+ * Análisis cromático de la foto de la planta con calibración física.
+ * Filtra el fondo mediante saturación y clasifica usando balance directo de canales.
  */
 String ejecutarAnalisisCromatico(camera_fb_t* fb) {
     uint8_t* rgb_buf = (uint8_t*)ps_malloc(fb->width * fb->height * 2);
@@ -138,62 +139,88 @@ String ejecutarAnalisisCromatico(camera_fb_t* fb) {
         return "Error de memoria en el analisis";
     }
 
-    Serial.println(F("Descomprimiendo JPEG a RGB565 en tiempo real..."));
+    Serial.println(F("Descomprimiendo JPEG a RGB565..."));
+
     if (!jpg2rgb565(fb->buf, fb->len, rgb_buf, JPG_SCALE_NONE)) {
         Serial.println(F("Error al transformar el formato."));
         free(rgb_buf);
         return "Error al procesar la imagen";
     }
 
-    // Contadores para clasificar los píxeles del área central
     unsigned long pixelesVerdes = 0;
     unsigned long pixelesAmarillos = 0;
+    unsigned long pixelesValidos = 0;
 
-    // Ancho y alto completo de la captura
     int ancho = fb->width;
     int alto = fb->height;
 
-    // Analizar solamente la zona central de la imagen
+    // Región de interés (ROI) al 60% central para evitar bordes externos
     int xInicio = ancho * 0.2;
     int xFin = ancho * 0.8;
     int yInicio = alto * 0.2;
     int yFin = alto * 0.8;
 
-    // Convertir cada píxel RGB565 a RGB888 para compararlo
     for (int y = yInicio; y < yFin; y++) {
         for (int x = xInicio; x < xFin; x++) {
-            int indice = (y * ancho + x) * 2;
-            uint8_t byte1 = rgb_buf[indice];
-            uint8_t byte2 = rgb_buf[indice + 1];
+            int index = (y * ancho + x) * 2;
+
+            uint8_t byte1 = rgb_buf[index];
+            uint8_t byte2 = rgb_buf[index + 1];
             uint16_t rgb565 = (byte1 << 8) | byte2;
 
+            // Decodificación estricta RGB565 → RGB888
             uint8_t r = ((rgb565 >> 11) & 0x1F) * 255 / 31;
             uint8_t g = ((rgb565 >> 5) & 0x3F) * 255 / 63;
             uint8_t b = (rgb565 & 0x1F) * 255 / 31;
 
-            if (g > r && g > b) {
+            // Calculo de Saturación (S) para el filtro de fondo
+            float rf = r / 255.0;
+            float gf = g / 255.0;
+            float bf = b / 255.0;
+
+            float maxVal = fmaxf(rf, fmaxf(gf, bf));
+            float minVal = fminf(rf, fminf(gf, bf));
+            float delta = maxVal - minVal;
+
+            float s = (maxVal == 0) ? 0 : (delta / maxVal);
+
+            // ===== FILTRO DE RUIDO Y FONDO =====
+            // Si el píxel está muy lavado por luz ambiente o es gris/sombra, se descarta
+            if (s < 0.15) {
+                continue;
+            }
+            pixelesValidos++;
+
+            // ===== CLASIFICACIÓN CORREGIDA POR TOLERANCIA DE PALIDEZ =====
+            // Si el Verde domina cómodamente (el verde real de una hoja sana le saca ventaja al rojo)
+            if (g > (r * 1.15)) {
                 pixelesVerdes++;
-            } else if (r > b && g > b && abs(r - g) < 40) {
+            }
+            // Si el Rojo y el Verde están muy parejos (típico de hojas descoloridas, amarillo lima o crema)
+            else if (r >= (g * 0.75)) {
                 pixelesAmarillos++;
             }
         }
     }
 
+    // Liberamos la memoria de inmediato para evitar bloqueos en la ESP32-CAM
     free(rgb_buf);
 
-    unsigned long totalClasificados = pixelesVerdes + pixelesAmarillos;
+    if (pixelesValidos == 0) {
+        return "No se detecta vegetacion util en la imagen.";
+    }
 
-    if (totalClasificados > 0) {
-        float ratioEnfermo = ((float)pixelesAmarillos / totalClasificados) * 100.0;
-        Serial.printf("Analisis completado. Ratio de daño: %.2f%%\n", ratioEnfermo);
+    // Cálculo de porcentajes sobre la muestra limpia
+    float ratioAmarillo = ((float)pixelesAmarillos / pixelesValidos) * 100.0;
+    float ratioVerde = ((float)pixelesVerdes / pixelesValidos) * 100.0;
 
-        if (ratioEnfermo > 25.0) {
-            return "DIAGNÓSTICO -> ⚠️ PLANTA ENFERMA (Clorosis: " + String(ratioEnfermo, 2) + "%)";
-        } else {
-            return "DIAGNÓSTICO -> ✅ PLANTA SANA (Daño: " + String(ratioEnfermo, 2) + "%)";
-        }
+    Serial.printf("Verde Real: %.2f%% | Amarillo Detectado: %.2f%%\n", ratioVerde, ratioAmarillo);
+
+    // Evaluación final según el umbral del 15% estipulado
+    if (ratioAmarillo > 15.0) {
+        return "DIAGNÓSTICO -> ⚠️ PLANTA ENFERMA (Clorosis: " + String(ratioAmarillo, 2) + "%)";
     } else {
-        return "No se detecta ninguna hoja en el centro de la camara.";
+        return "DIAGNÓSTICO -> ✅ PLANTA SANA (Daño: " + String(ratioAmarillo, 2) + "%)";
     }
 }
 
