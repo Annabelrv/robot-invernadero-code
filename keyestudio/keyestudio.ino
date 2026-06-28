@@ -83,23 +83,23 @@ void frenar() {
 }
 
 /**
- * Girar a la derecha (con cierta velocidad).
+ * Girar a la derecha a velocidad dada.
  */
-void girarDerecha() {
+void girarDerecha(int velocidad) {
     digitalWrite(PIN_DIR_A, LOW);
+    analogWrite(PIN_PWM_A, 255 - velocidad);
     digitalWrite(PIN_DIR_B, HIGH);
-    analogWrite(PIN_PWM_A, 50);
-    analogWrite(PIN_PWM_B, 200);
+    analogWrite(PIN_PWM_B, velocidad);
 }
 
 /**
- * Girar a la izquierda (con cierta velocidad).
+ * Girar a la izquierda a velocidad dada.
  */
-void girarIzquierda() {
+void girarIzquierda(int velocidad) {
     digitalWrite(PIN_DIR_A, HIGH);
+    analogWrite(PIN_PWM_A, velocidad);
     digitalWrite(PIN_DIR_B, LOW);
-    analogWrite(PIN_PWM_A, 200);
-    analogWrite(PIN_PWM_B, 50);
+    analogWrite(PIN_PWM_B, 255 - velocidad);
 }
 
 /**
@@ -132,7 +132,7 @@ void setup() {
     pinMode(PIN_TX, OUTPUT);
     pinMode(PIN_RX, INPUT);
     digitalWrite(PIN_TX, LOW);
-    
+
     // Esperar hasta que la ESP32 indique que está lista
     delay(1000);
     while (true) {
@@ -181,8 +181,8 @@ void loop() {
             delay(10);
         }
 
-        girarDerecha();
-        delay(3000);  // Tiempo estimado para girar ~90°
+        girarDerecha(180);
+        delay(1500);  // Tiempo estimado para girar ~90°
 
         frenar();
         delay(500);
